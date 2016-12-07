@@ -34,12 +34,14 @@ static mqd_t PIN_MSG = -1;
 
 pthread_mutex_t printing_lock;
 
+/*****************UTILITIES*************/
 void lockAndPrint(string printThis){
 	pthread_mutex_lock(&printing_lock);
 	cout << printThis;
 	pthread_mutex_unlock(&printing_lock);
 }
 
+/******************MISC******************/
 void sig_handler(int signum){
 	//ASSERT(signum == SIGINT);
 	if (signum == SIGINT){
@@ -53,6 +55,8 @@ void sig_handler(int signum){
 		mq_unlink(PIN_MSG_NAME);
 	}
 }
+
+
 
 int main(int argc, char const *argv[])
 {
@@ -98,6 +102,7 @@ int main(int argc, char const *argv[])
 
 	sig_handler(SIGINT);
 }
+
 
 void* run_ATM(void* arg) {
 	int status;
