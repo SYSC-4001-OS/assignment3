@@ -15,7 +15,13 @@ using namespace std;
 #define PIN_MSG_NAME "/pin_msg"
 #define DB_MSG_NAME "/db_msg"
 
-#define MESSAGE_QUEUE_SIZE 9
+
+typedef struct Pin_msg_struct{
+	char acctNum[6];
+	char PIN[4];
+} Pin_msg_struct;
+
+#define PIN_MESSAGE_QUEUE_SIZE sizeof(Pin_msg_struct)
 
 pthread_t ATM;
 pthread_t DB_server;
@@ -42,6 +48,9 @@ void sig_handler(int signum){
 		pthread_cancel(ATM);
 		pthread_cancel(DB_server);
 		pthread_cancel(DB_editor);
+
+		mq_close(PIN_MSG);
+		mq_unlink(PIN_MSG_NAME);
 	}
 }
 
@@ -61,7 +70,7 @@ int main(int argc, char const *argv[])
 
 	/******************MESSAGE QUEUE INIT*************/
 	mq_attribute.mq_maxmsg = 10; //mazimum of 10 messages in the queue at the same time
-	mq_attribute.mq_msgsize = (size_t) MESSAGE_QUEUE_SIZE;
+	mq_attribute.mq_msgsize = (size_t) PIN_MESSAGE_QUEUE_SIZE;
 
 	PIN_MSG = mq_open(PIN_MSG_NAME , O_CREAT | O_RDWR, 0666, &mq_attribute);
 	if (PIN_MSG == -1){
@@ -94,7 +103,7 @@ void* run_ATM(void* arg) {
 	int status;
 	char accountNumber[6];
 	char PIN[4];
-	char accountNumAndPIN[10];
+	Pin_msg_struct message;
 	
 	lockAndPrint("ATM is running\n");
 	lockAndPrint("Please input account number > ");
@@ -102,20 +111,17 @@ void* run_ATM(void* arg) {
 	lockAndPrint("Please input PIN > ");
 	cin >> PIN;
 
-	for (int i = 0; i < 6; ++i)
+	for (int i = 0; i < 5; ++i)
 	{
-		accountNumAndPIN[i] = accountNumber[i];
+		message.acctNum[i] = accountNumber[i];
 	}
-
-	accountNumAndPIN[5] = ',';
-
-	for (int i = 6; i < 10; ++i)
+	for (int i = 0; i < 3; ++i)
 	{
-		accountNumAndPIN[i] = PIN[i-6];
+		message.PIN[i] = PIN[i];
 	}
 
 	pthread_mutex_lock(&printing_lock);
-	status = mq_send(PIN_MSG, accountNumAndPIN, sizeof(accountNumAndPIN), 1);
+	status = mq_send(PIN_MSG, (const char*) &message, sizeof(message), 1);
 	if (status < 0){
 		perror("sending message failed");
 	}
@@ -125,17 +131,14 @@ void* run_ATM(void* arg) {
 void* run_DB(void* arg){
 	lockAndPrint("Database server running\n");
 	int status;
-	char received_acct_number[30];
+	Pin_msg_struct rcv_message;
 
 	while(1){
-		status = mq_receive(PIN_MSG, received_acct_number, sizeof(received_acct_number), NULL);
+		status = mq_receive(PIN_MSG, (char*) &rcv_message, sizeof(rcv_message), NULL); //we have the PIN and acctNum here, for safety, only use the first 5 and 3 chars respectively
 		if (status < 0){
 			perror("error ");
 		} else {
-			for (int i = 0; i < 10; ++i)
-			{
-				printf("%c", received_acct_number[i]);
-			}
+			cout << rcv_message.acctNum << " : " << rcv_message.PIN << endl;
 		}
 	}
 }
