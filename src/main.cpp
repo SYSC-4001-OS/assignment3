@@ -10,6 +10,7 @@
 #include <mqueue.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <unistd.h>
 
 
 using namespace std;
@@ -20,17 +21,17 @@ using namespace std;
 #define DATABASE_FILENAME "../database.db"
 #define TEMPFILE_FILENAME "../tempFile.db"
 
-typedef struct Pin_msg_struct{
+typedef struct Pin_msg_struct{ //sent over PIN_MSG
 	char acctNum[6];
 	char PIN[4];
 } Pin_msg_struct;
 
-typedef struct Fund_request_struct{
+typedef struct Fund_request_struct{ //send over PIN_MSG
 	char requestType[2]; //FR for request funds, WF for withdraw, RR returned request, RW returned withdraw
 	char fundRequest[8];
 } Fund_request_struct;
 
-typedef struct DB_msg_struct{
+typedef struct DB_msg_struct{ //sent over DB_MSG
 	char message[6]; //only thing for now
 } DB_msg_struct;
 
@@ -42,6 +43,7 @@ pthread_t DB_server;
 pthread_t DB_editor;
 void* run_ATM(void* arg);
 void* run_DB(void* arg);
+void* run_DB_editor(void* arg);
 
 static struct mq_attr mq_attribute;
 static mqd_t PIN_MSG = -1;
@@ -49,6 +51,7 @@ static mqd_t DB_MSG = -1;
 
 pthread_mutex_t printing_lock;
 pthread_mutex_t file_working_lock;
+pthread_mutex_t editorAwake;
 
 /*****************UTILITIES*************/
 void lockAndPrint(string printThis){
@@ -124,7 +127,10 @@ int main(int argc, char const *argv[])
 	if (rc < 0){
 		perror("Error creating mutex");
 	}
-
+	rc = pthread_mutex_init(&editorAwake, NULL);
+	if (rc < 0){
+		perror("Error creating mutex");
+	}
 
 	/******************MESSAGE QUEUE INIT*************/
 	mq_attribute.mq_maxmsg = 10; //mazimum of 10 messages in the queue at the same time
@@ -144,6 +150,8 @@ int main(int argc, char const *argv[])
 	}
 	/*************************************************/
 
+	pthread_mutex_lock(&editorAwake); //the editor starts asleep
+
 	/****************PTHREAD INIT AND RUN************/
 	pthread_attr_init(&attr);
 	pthread_attr_setstacksize(&attr, 1024*1024);
@@ -151,15 +159,18 @@ int main(int argc, char const *argv[])
 	long start_arg = 0; //the start argument is unused right now
 	pthread_create(&ATM, NULL, run_ATM, (void*) start_arg);
 	pthread_create(&DB_server, NULL, run_DB, (void*) start_arg);
+	pthread_create(&DB_editor, NULL, run_DB_editor, (void*) start_arg);
 	/***************************************************/
 
 
 	pthread_join(ATM, NULL);
 	pthread_join(DB_server, NULL);
+	pthread_join(DB_editor, NULL);
 
 	/******************MUTEX DESTROY******************/
 	pthread_mutex_destroy(&printing_lock);
 	pthread_mutex_destroy(&file_working_lock);
+	pthread_mutex_destroy(&editorAwake);
 
 	sig_handler(SIGINT);
 }
@@ -177,62 +188,68 @@ void* run_ATM(void* arg) {
 	while(1){
 		lockAndPrint("Please input account number > ");
 		cin >> accountNumber;
-		lockAndPrint("Please input PIN > ");
-		cin >> PIN;
-
-		for (int i = 0; i < 5; ++i)
-		{
-			message.acctNum[i] = accountNumber[i];
-		}
-		for (int i = 0; i < 3; ++i)
-		{
-			message.PIN[i] = PIN[i];
-		}
-
-		status = mq_send(PIN_MSG, (const char*) &message, sizeof(message), 1);
-		if (status < 0){
-			perror("sending PIN message failed");
-			exit(0);
-		}
-
-		status = mq_receive(DB_MSG, (char*) &rcv_message, sizeof(rcv_message), NULL);
-		if (status < 0){
-			perror("receiving DB message failed");
-			exit(0);
-		}
-		if(arrayEquals(rcv_message.message, "OKAY", 4)){
-			
-			char inputVal[20];
-			char fundRequest[10];
-			Fund_request_struct frs;			
-
-			lockAndPrint("Login successful, requestFunds or withdraw-(quantity) > ");
-
-
-			while(1){
-				cin >> inputVal;
-				if (arrayEquals(inputVal, "requestFunds", 13)){
-					memcpy(frs.requestType, "FR", 2);					
-					mq_send(PIN_MSG, (const char*) &frs, sizeof(frs), 1);
-					mq_receive(PIN_MSG, (char *) &frs, sizeof(frs), NULL);
-					pthread_mutex_lock(&printing_lock);
-					cout << "Fund request made, funds available : " << frs.fundRequest << endl;
-					pthread_mutex_unlock(&printing_lock);
-					break;
-				}
-				if (arrayEquals(inputVal, "withdraw", 8)) {
-					memcpy(frs.requestType, "WF", 2);
-					memcpy(frs.fundRequest, &inputVal[9], 11);
-					mq_send(PIN_MSG, (char*) &frs, sizeof(frs), 1);
-					mq_receive(PIN_MSG, (char*) &frs, sizeof(frs), NULL);
-					cout << "Withdrawal result: " << frs.fundRequest << endl;
-					break;
-				} 				
-				lockAndPrint("Invalid input, please try again > ");
+		if (arrayEquals(accountNumber, "DBEDT", 5)){
+			lockAndPrint("Waking up DB editor\n");
+			pthread_mutex_unlock(&editorAwake); //wake up the editor
+			usleep(100000);
+			pthread_mutex_lock(&editorAwake);
+		} else {
+			lockAndPrint("Please input PIN > ");
+			cin >> PIN;
+			for (int i = 0; i < 5; ++i)
+			{
+				message.acctNum[i] = accountNumber[i];
+			}
+			for (int i = 0; i < 3; ++i)
+			{
+				message.PIN[i] = PIN[i];
 			}
 
+			status = mq_send(PIN_MSG, (const char*) &message, sizeof(message), 1);
+			if (status < 0){
+				perror("sending PIN message failed");
+				exit(0);
+			}
 
-		} else lockAndPrint("Username or password was incorrect\n");
+			status = mq_receive(DB_MSG, (char*) &rcv_message, sizeof(rcv_message), NULL);
+			if (status < 0){
+				perror("receiving DB message failed");
+				exit(0);
+			}
+			if(arrayEquals(rcv_message.message, "OKAY", 4)){
+				
+				char inputVal[20];
+				char fundRequest[10];
+				Fund_request_struct frs;			
+
+				lockAndPrint("Login successful, requestFunds or withdraw-(quantity) > ");
+
+
+				while(1){
+					cin >> inputVal;
+					if (arrayEquals(inputVal, "requestFunds", 13)){
+						memcpy(frs.requestType, "FR", 2);					
+						mq_send(PIN_MSG, (const char*) &frs, sizeof(frs), 1);
+						mq_receive(PIN_MSG, (char *) &frs, sizeof(frs), NULL);
+						pthread_mutex_lock(&printing_lock);
+						cout << "Fund request made, funds available : " << frs.fundRequest << endl;
+						pthread_mutex_unlock(&printing_lock);
+						break;
+					}
+					if (arrayEquals(inputVal, "withdraw", 8)) {
+						memcpy(frs.requestType, "WF", 2);
+						memcpy(frs.fundRequest, &inputVal[9], 11);
+						mq_send(PIN_MSG, (char*) &frs, sizeof(frs), 1);
+						mq_receive(PIN_MSG, (char*) &frs, sizeof(frs), NULL);
+						cout << "Withdrawal result: " << frs.fundRequest << endl;
+						break;
+					} 				
+					lockAndPrint("Invalid input, please try again > ");
+				}
+
+
+			} else lockAndPrint("Username or password was incorrect\n");
+		}
 	}
 }
 
@@ -359,8 +376,11 @@ void* run_DB(void* arg){
 							fprintf(newFile, "%c", mLine[i]); //the first half of this line is unchanged
 						}
 						fprintf(newFile, "%.2f\n", money); //print out the new money
-						memcpy(fr_message.fundRequest, "ENOUGH", strlen("ENOUGH") + 1); //this is what we're going to send
-					} else memcpy(fr_message.fundRequest, "LO FUNDS", strlen("LO FUNDS") + 1); //don't +1 because there's no room in the array.
+						memcpy(fr_message.fundRequest, "ENOUGH", strlen("ENOUGH")); //this is what we're going to send
+					} else {
+						memcpy(fr_message.fundRequest, "LO FUNDS", strlen("LO FUNDS"));
+						fprintf(newFile, "%s", mLine);
+					}
 					vr = fgets(mLine, 20, database); //fetch the next line for the processing loop
 				}
 				memcpy(fr_message.requestType, "RW", 2);
@@ -375,4 +395,23 @@ void* run_DB(void* arg){
 
 	}
 	fclose(database);
+}
+
+
+void * run_DB_editor(void* arg){
+	FILE* databasePointer;
+	while(1){
+		char inputArray[20];
+		pthread_mutex_lock(&editorAwake);
+		lockAndPrint("DB editor awake, please input a new entry > ");
+		cin >> inputArray;
+		pthread_mutex_lock(&file_working_lock); //going to do file work, we need the file lock.
+			databasePointer = fopen(DATABASE_FILENAME, "a");
+			if (databasePointer == NULL)lockAndPrint("ERROR - DATABASE FILE DOES NOT EXIST\n");
+			fprintf(databasePointer, "%s\n", inputArray);
+			fclose(databasePointer);
+		pthread_mutex_unlock(&file_working_lock);
+		pthread_mutex_unlock(&editorAwake);
+		usleep(10000);
+	}
 }
