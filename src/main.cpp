@@ -15,7 +15,7 @@ using namespace std;
 #define PIN_MSG_NAME "/pin_msg"
 #define DB_MSG_NAME "/db_msg"
 
-#define MESSAGE_QUEUE_SIZE 10
+#define MESSAGE_QUEUE_SIZE 9
 
 pthread_t ATM;
 pthread_t DB_server;
