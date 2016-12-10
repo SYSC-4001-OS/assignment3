@@ -19,14 +19,13 @@ Brydon Gibson				[100975274]
 
 -----------------------------------------------------------
 CONTENTS:
-
 	* main.cpp
 	* main
 	* database.db
 	* README.txt
 	* SYSC4001-A3-VanKerkhoven-Gibson
 
-	
+
 
 
 -----------------------------------------------------------
@@ -93,9 +92,36 @@ OPERATIONS MANUAL:
 	If the account is locked due to too many incorrect PINs being inputed in
 	a row, the account number will have an 'X' char preceding it, denoting the
 	account cannot be accessed.
+
+
+
+
+-----------------------------------------------------------
+KNOWN BUGS:
+
+	There is a known bug where if you view the balance of an account using the
+	"request funds" command from the terminal, two pseudo-random characters will
+	be appended the the end of the output.
+	(ie it will print your funds as 12.34aa", where aa are two pseudo-random chars).
 	
+	This is beleived to be either some index out of bounds exception, and 2 random bytes
+	are printed. Due to time constraints, this bug was not patched.
 	
-	
-	
-	
-	
+	It should be noted, however, that this does not impede or prevent the critical
+	functionality of this code, as the database.db file contains the correct value, as
+	well as is read correctly.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<end>
